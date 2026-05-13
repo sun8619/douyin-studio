@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const STATUS_API_URL = 'https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks';
 const VIDEO_API_KEY = process.env.DOUBO_API_KEY;
-if (!VIDEO_API_KEY) {
-  return NextResponse.json({ error: '未配置 API Key' }, { status: 500 });
+
+function requireVideoKey() {
+  if (!VIDEO_API_KEY) {
+    return NextResponse.json(
+      { error: 'Server misconfiguration: DOUBO_API_KEY environment variable is not set' },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET(request: NextRequest) {
+  const keyErr = requireVideoKey();
+  if (keyErr) return keyErr;
   const taskId = request.nextUrl.searchParams.get('taskId');
 
   if (!taskId) {
