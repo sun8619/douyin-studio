@@ -25,6 +25,9 @@ export default function TextCreationPage() {
     differentiators: string[];
   } | null>(null);
   const [brandSource, setBrandSource] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [pollCount, setPollCount] = useState(0);
+  const [generationMessage, setGenerationMessage] = useState('');
   const [isSearchingBrand, setIsSearchingBrand] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [results, setResults] = useState<Array<{ content: string; id: string; version: string; tags: string[] }>>([]);
@@ -54,33 +57,85 @@ export default function TextCreationPage() {
   };
 
   const handleGenerate = async () => {
-    if (!industry || !category || !topic.trim()) return;
+    if (!industry || !category) return;
     setIsGenerating(true);
     setResults([]);
     setSelectedVersion(null);
+    setJobId(null);
+    setGenerationMessage('✨ 小七正在构思品牌化脚本，约1分钟完成...');
+    setPollCount(0);
+
     try {
       const res = await fetch('/api/text/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ textType: selectedType, industry, category, brandName: brandName.trim(), topic: topic.trim(), versionCount: 3 }),
+        body: JSON.stringify({
+          textType: selectedType,
+          industry,
+          category,
+          brandName: brandName.trim(),
+          topic: topic.trim(),
+          versionCount: 3,
+        }),
       });
       const data = await res.json();
-      if (data.success && data.versions) {
-        setBrandInfo(data.brand || null);
-        setBrandSource(data.brandSource || null);
-        const mapped = data.versions.map((v: { content: string; id: string; version: string; tags: string[] }) => ({ content: v.content, id: v.id, version: v.version, tags: v.tags }));
+
+      if (data.success && data.jobId) {
+        setJobId(data.jobId);
+        setGenerationMessage(data.message || '✨ 文案生成中，约1分钟完成...');
+        // 开始轮询
+        pollJobResult(data.jobId);
+        return;
+      }
+
+      // 降级：显示排队中
+      setGenerationMessage(data.message || '已加入队列，请稍候...');
+    } catch {
+      setGenerationMessage('生成失败，请重试');
+    }
+    setIsGenerating(false);
+  };
+
+  const pollJobResult = async (id: string) => {
+    setPollCount(c => c + 1);
+    try {
+      const res = await fetch(`/api/text/status?jobId=${id}`);
+      const data = await res.json();
+
+      if (data.status === 'success' && data.result) {
+        const mapped = data.result.versions.map((v: { content: string; id: string; version: string; tags: string[] }) => ({
+          content: v.content,
+          id: v.id,
+          version: v.version,
+          tags: v.tags,
+        }));
         setResults(mapped);
         if (mapped.length > 0) setSelectedVersion(mapped[0].id);
+        if (data.result.brand) setBrandInfo(data.result.brand);
+        if (data.result.brandSource) setBrandSource(data.result.brandSource);
+        setGenerationMessage('');
+        setIsGenerating(false);
+        return;
+      }
+
+      if (data.status === 'failed') {
+        setGenerationMessage(`生成失败：${data.error || '未知错误'}`);
+        setIsGenerating(false);
+        return;
+      }
+
+      // 还在处理中，继续轮询（最多30次，约2.5分钟）
+      if (pollCount < 30) {
+        setGenerationMessage(`🤔 小七还在构思中...（${pollCount * 5}秒）`);
+        setTimeout(() => pollJobResult(id), 5000);
       } else {
-        const mock = mockTextResults[selectedType] || [];
-        setResults(mock.map((r) => ({ content: r.content, id: r.id, version: r.version, tags: r.tags })));
-        if (mock.length > 0) setSelectedVersion(mock[0].id);
+        setGenerationMessage('生成超时，请稍后重试');
+        setIsGenerating(false);
       }
     } catch {
-      const mock = mockTextResults[selectedType] || [];
-      setResults(mock.map((r) => ({ content: r.content, id: r.id, version: r.version, tags: r.tags })));
-      if (mock.length > 0) setSelectedVersion(mock[0].id);
-    } finally { setIsGenerating(false); }
+      setGenerationMessage('查询失败，请重试');
+      setIsGenerating(false);
+    }
   };
 
   const handleCopy = async (content: string, id: string) => {
@@ -243,9 +298,9 @@ export default function TextCreationPage() {
 
               <Button
                 onClick={handleGenerate}
-                disabled={!industry || !category || !topic.trim() || isGenerating}
+                disabled={!industry || !category || isGenerating}
                 className={`w-full h-11 text-sm font-medium transition-all ${
-                  !industry || !category || !topic.trim()
+                  !industry || !category
                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     : 'bg-gradient-to-r from-red-500 to-orange-400 hover:from-red-600 hover:to-orange-500 text-white shadow-sm'
                 }`}
@@ -253,14 +308,18 @@ export default function TextCreationPage() {
                 {isGenerating ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    AI 正在生成中，请稍候...
+                    小七 AI 构思中...
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
-                    🚀 {selectedType === 'script' ? '生成脚本' : selectedType === 'livestream' ? '生成话术' : selectedType === 'recommend' ? '生成文案' : '生成回复'} ({topic.length > 0 ? '3' : '0'}/3 次)
+                    🚀 生成脚本（3个版本）
                   </span>
                 )}
               </Button>
+              {/* 轮询状态提示 */}
+              {isGenerating && generationMessage && (
+                <p className="text-xs text-center text-slate-500 mt-1">{generationMessage}</p>
+              )}
             </CardContent>
           </Card>
         </div>
