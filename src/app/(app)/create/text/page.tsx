@@ -18,32 +18,76 @@ export default function TextCreationPage() {
   const [industry, setIndustry] = useState('');
   const [category, setCategory] = useState('');
   const [topic, setTopic] = useState('');
+  const [brandName, setBrandName] = useState('');
+  const [brandInfo, setBrandInfo] = useState<{
+    name: string; vibe: string; tagline: string;
+    signature: Array<{ name: string; tag?: string }>;
+    differentiators: string[];
+  } | null>(null);
+  const [brandSource, setBrandSource] = useState<string | null>(null);
+  const [isSearchingBrand, setIsSearchingBrand] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [results, setResults] = useState<string[]>([]);
+  const [results, setResults] = useState<Array<{ content: string; id: string; version: string; tags: string[] }>>([]);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedVersion, setCopiedVersion] = useState<string | null>(null);
 
   const filteredCategories = categories.filter((c) => !industry || c.industry === industry);
+
+  const handleSearchBrand = async () => {
+    if (!brandName.trim() || !category) return;
+    setIsSearchingBrand(true);
+    setBrandInfo(null);
+    try {
+      const res = await fetch('/api/brand/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brandName: brandName.trim(), category }),
+      });
+      const data = await res.json();
+      if (data.success && data.brand) {
+        setBrandInfo(data.brand);
+        setBrandSource(data.source);
+      }
+    } catch { /* silent */ }
+    finally { setIsSearchingBrand(false); }
+  };
 
   const handleGenerate = async () => {
     if (!industry || !category || !topic.trim()) return;
     setIsGenerating(true);
     setResults([]);
     setSelectedVersion(null);
-
-    // Simulate AI generation delay
-    await new Promise((r) => setTimeout(r, 1800));
-
-    const mockResults = mockTextResults[selectedType] || [];
-    setResults(mockResults.map((r) => r.content));
-    if (mockResults.length > 0) setSelectedVersion(mockResults[0].id);
-    setIsGenerating(false);
+    try {
+      const res = await fetch('/api/text/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ textType: selectedType, industry, category, brandName: brandName.trim(), topic: topic.trim(), versionCount: 3 }),
+      });
+      const data = await res.json();
+      if (data.success && data.versions) {
+        setBrandInfo(data.brand || null);
+        setBrandSource(data.brandSource || null);
+        const mapped = data.versions.map((v: { content: string; id: string; version: string; tags: string[] }) => ({ content: v.content, id: v.id, version: v.version, tags: v.tags }));
+        setResults(mapped);
+        if (mapped.length > 0) setSelectedVersion(mapped[0].id);
+      } else {
+        const mock = mockTextResults[selectedType] || [];
+        setResults(mock.map((r) => ({ content: r.content, id: r.id, version: r.version, tags: r.tags })));
+        if (mock.length > 0) setSelectedVersion(mock[0].id);
+      }
+    } catch {
+      const mock = mockTextResults[selectedType] || [];
+      setResults(mock.map((r) => ({ content: r.content, id: r.id, version: r.version, tags: r.tags })));
+      if (mock.length > 0) setSelectedVersion(mock[0].id);
+    } finally { setIsGenerating(false); }
   };
 
   const handleCopy = async (content: string, id: string) => {
     await navigator.clipboard.writeText(content);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+    setCopiedVersion(id);
+    setTimeout(() => { setCopiedId(null); setCopiedVersion(null); }, 2000);
   };
 
   const selectedTypeInfo = textTypes.find((t) => t.value === selectedType);
@@ -142,6 +186,61 @@ export default function TextCreationPage() {
                 </div>
               </div>
 
+              {/* 品牌名称搜索 */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-slate-600">
+                  门店名称 <span className="text-slate-400 font-normal">(可选，填入后生成品牌定制脚本)</span>
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={brandName}
+                    onChange={(e) => setBrandName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSearchBrand(); }}
+                    placeholder="例如：柠季、古茗、霸王茶姬"
+                    className="flex-1 h-10 text-sm border-slate-200 bg-slate-50"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSearchBrand}
+                    disabled={!brandName.trim() || !category || isSearchingBrand}
+                    className="h-10 text-xs px-3 border-slate-200"
+                  >
+                    {isSearchingBrand ? (
+                      <span className="flex items-center gap-1">
+                        <span className="w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                        搜索中
+                      </span>
+                    ) : '🔍 匹配品牌'}
+                  </Button>
+                </div>
+                {brandInfo && (
+                  <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-blue-700">{brandInfo.name}</span>
+                      {brandSource && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${brandSource === 'local' ? 'bg-green-100 text-green-700' : brandSource === 'online' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                          {brandSource === 'local' ? '✓ 本地品牌库' : brandSource === 'online' ? '🌐 联网匹配' : '📋 品类参考'}
+                        </span>
+                      )}
+                    </div>
+                    {brandInfo.tagline && (
+                      <p className="text-xs text-blue-600 italic">"{brandInfo.tagline}"</p>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {brandInfo.signature?.slice(0, 3).map((p) => (
+                        <span key={p.name} className="text-xs bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5">
+                          {p.tag === '招牌' ? '⭐ ' : p.tag === '爆款' ? '🔥 ' : ''}{p.name}
+                        </span>
+                      ))}
+                    </div>
+                    {brandInfo.differentiators && brandInfo.differentiators.length > 0 && (
+                      <p className="text-xs text-slate-500">亮点：{brandInfo.differentiators.slice(0, 3).join(' · ')}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <Button
                 onClick={handleGenerate}
                 disabled={!industry || !category || !topic.trim() || isGenerating}
@@ -197,10 +296,8 @@ export default function TextCreationPage() {
               </div>
             )}
 
-            {!isGenerating && results.map((content, idx) => {
-              const versionId = mockTextResults[selectedType]?.[idx]?.id || String(idx);
-              const versionLabel = mockTextResults[selectedType]?.[idx]?.version || `版本 ${idx + 1}`;
-              const versionTags = mockTextResults[selectedType]?.[idx]?.tags || [];
+            {!isGenerating && results.map((item, idx) => {
+              const versionId = item.id || String(idx);
               return (
                 <Card
                   key={versionId}
@@ -219,16 +316,16 @@ export default function TextCreationPage() {
                         }`}>
                           {String.fromCharCode(65 + idx)}
                         </span>
-                        <CardTitle className="text-sm font-semibold text-slate-800">{versionLabel}</CardTitle>
+                        <CardTitle className="text-sm font-semibold text-slate-800">{item.version}</CardTitle>
                       </div>
                       <div className="flex items-center gap-2">
-                        {versionTags.map((tag) => (
+                        {(item.tags || []).map((tag) => (
                           <Badge key={tag} className="bg-slate-100 text-slate-500 hover:bg-slate-100 text-xs">{tag}</Badge>
                         ))}
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={(e) => { e.stopPropagation(); handleCopy(content, versionId); }}
+                          onClick={(e) => { e.stopPropagation(); handleCopy(item.content, versionId); }}
                           className={`h-7 text-xs transition-all ${
                             copiedId === versionId
                               ? 'text-green-600 bg-green-50'
@@ -242,7 +339,7 @@ export default function TextCreationPage() {
                   </CardHeader>
                   <CardContent>
                     <pre className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed font-mono bg-white rounded-lg p-4 border border-slate-100">
-                      {content}
+                      {item.content}
                     </pre>
                   </CardContent>
                 </Card>
