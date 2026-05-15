@@ -32,6 +32,7 @@ interface VideoResult {
 }
 
 type GenState = 'idle' | 'submitting' | 'polling' | 'success' | 'error';
+type GenEngine = 'doubao' | 'dreamina';
 
 export default function VideoCreationPage() {
   const [industry, setIndustry] = useState('奶茶');
@@ -77,6 +78,9 @@ export default function VideoCreationPage() {
     }
   };
 
+  const [engine, setEngine] = useState<GenEngine>('doubao');
+  const [dreaminaJobId, setDreaminaJobId] = useState('');
+
   const submitGeneration = async () => {
     const finalScript = useTemplate
       ? `第一人称视角${industry}商家宣传，${script || '展示门店环境、产品特色、服务过程，背景音配合文字字幕，营造专业温馨氛围。'}`
@@ -90,7 +94,40 @@ export default function VideoCreationPage() {
     setState('submitting');
     setError('');
     setResult(null);
+    setDreaminaJobId('');
 
+    // ── 即梦通道 ──
+    if (engine === 'dreamina') {
+      try {
+        const res = await fetch('/api/dreamina/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'text2video',
+            prompt: finalScript,
+            industry,
+            ratio,
+            duration,
+            referenceImageUrl: referenceImageUrl || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || '提交失败');
+        }
+        setDreaminaJobId(data.jobId);
+        setTaskId(data.jobId);
+        setState('polling');
+        setPollCount(0);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '未知错误';
+        setError(msg);
+        setState('error');
+      }
+      return;
+    }
+
+    // ── 豆包通道 ──
     try {
       const res = await fetch('/api/video/generate', {
         method: 'POST',
@@ -130,6 +167,32 @@ export default function VideoCreationPage() {
     if (!taskId) return;
     setPollCount(c => c + 1);
 
+    // ── 即梦轮询 ──
+    if (dreaminaJobId && engine === 'dreamina') {
+      try {
+        const res = await fetch(`/api/dreamina/status?jobId=${dreaminaJobId}`);
+        const data = await res.json();
+
+        if (data.status === 'success' && data.result) {
+          setResult({
+            videoUrl: data.result.videoUrl,
+            coverUrl: data.result.coverUrl,
+          });
+          setState('success');
+        } else if (data.status === 'failed') {
+          setError(`生成失败: ${data.error || '未知错误'}`);
+          setState('error');
+        }
+        // else still polling
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '轮询失败';
+        setError(msg);
+        setState('error');
+      }
+      return;
+    }
+
+    // ── 豆包轮询 ──
     try {
       const res = await fetch(`/api/video/status?taskId=${taskId}`);
       const data = await res.json();
@@ -176,7 +239,9 @@ export default function VideoCreationPage() {
             <h1 className="text-2xl font-bold text-slate-900">🎬 短视频生成</h1>
             <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 text-xs">付费功能</Badge>
           </div>
-          <p className="text-slate-500 mt-1 text-sm">AI 生成完整短视频（脚本 → 画面 → 配音）· 接入字节·豆包跃创模型</p>
+          <p className="text-slate-500 mt-1 text-sm">
+            AI 生成完整短视频（脚本 → 画面 → 配音）· 支持🔥豆包·跃创 & ✨即梦 Dreamina
+          </p>
         </div>
       </header>
 
@@ -372,19 +437,56 @@ export default function VideoCreationPage() {
               </div>
             </div>
 
-            {/* Submit */}
+            {/* Engine Selector + Submit */}
             {state === 'idle' || state === 'error' ? (
-              <div className="flex items-center justify-between pt-2">
-                <div className="text-xs text-slate-400">
-                  模型：豆包·跃创视频 · {ratio} · {duration}秒
-                  {referenceImageUrl && ' · 含参考图片'}
+              <div className="space-y-3">
+                {/* 引擎选择 */}
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500 font-medium">生成引擎：</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setEngine('doubao')}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                        engine === 'doubao'
+                          ? 'bg-orange-50 border-orange-300 text-orange-700 font-semibold'
+                          : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      🔥 豆包·跃创
+                    </button>
+                    <button
+                      onClick={() => setEngine('dreamina')}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-all ${
+                        engine === 'dreamina'
+                          ? 'bg-pink-50 border-pink-300 text-pink-700 font-semibold'
+                          : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      ✨ 即梦 Dreamina
+                    </button>
+                  </div>
+                  {engine === 'dreamina' && (
+                    <span className="text-xs text-pink-500">由小七提供 · 创意风格更丰富</span>
+                  )}
                 </div>
-                <Button
-                  onClick={submitGeneration}
-                  className="bg-gradient-to-r from-pink-500 to-red-400 hover:from-pink-600 hover:to-red-500 text-white shadow-sm px-8"
-                >
-                  🎬 开始生成视频
-                </Button>
+
+                <div className="flex items-center justify-between pt-2">
+                  <div className="text-xs text-slate-400">
+                    {engine === 'doubao'
+                      ? `模型：豆包·跃创视频 · ${ratio} · ${duration}秒${referenceImageUrl ? ' · 含参考图片' : ''}`
+                      : `引擎：即梦 AI · ${ratio} · ${duration}秒 · 由小七生成${referenceImageUrl ? ' · 含参考图片' : ''}`
+                    }
+                  </div>
+                  <Button
+                    onClick={submitGeneration}
+                    className={engine === 'dreamina'
+                      ? 'bg-gradient-to-r from-pink-500 to-purple-400 hover:from-pink-600 hover:to-purple-500 text-white shadow-sm px-8'
+                      : 'bg-gradient-to-r from-pink-500 to-red-400 hover:from-pink-600 hover:to-red-500 text-white shadow-sm px-8'
+                    }
+                  >
+                    {engine === 'dreamina' ? '✨ 即梦生成视频' : '🎬 开始生成视频'}
+                  </Button>
+                </div>
               </div>
             ) : null}
           </CardContent>
@@ -410,7 +512,12 @@ export default function VideoCreationPage() {
                 <div className="w-10 h-10 border-3 border-pink-200 border-t-pink-500 rounded-full animate-spin flex-shrink-0" />
                 <div className="flex-1">
                   <p className="font-semibold text-pink-800">🎬 视频生成中（已等待 {pollCount * 5} 秒）</p>
-                  <p className="text-sm text-pink-600 mt-1">豆包 AI 正在生成中，通常需要 1-3 分钟</p>
+                  <p className="text-sm text-pink-600 mt-1">
+                    {engine === 'dreamina'
+                      ? `✨ 即梦 AI 正在生成中，通常需要 2-4 分钟，请稍候...`
+                      : `豆包 AI 正在生成中，通常需要 1-3 分钟`
+                    }
+                  </p>
                   <Progress value={Math.min((pollCount * 5 / 180) * 100, 90)} className="h-2 mt-3 bg-pink-100 [&>div]:bg-gradient-to-r [&>div]:from-pink-400 [&>div]:to-red-400" />
                 </div>
               </div>
@@ -466,7 +573,7 @@ export default function VideoCreationPage() {
                 <Button
                   variant="outline"
                   className="border-slate-300"
-                  onClick={() => { setState('idle'); setResult(null); setTaskId(''); }}
+                  onClick={() => { setState('idle'); setResult(null); setTaskId(''); setDreaminaJobId(''); }}
                 >
                   🔄 再生成一条
                 </Button>
@@ -495,7 +602,7 @@ export default function VideoCreationPage() {
               </div>
               <div className="flex gap-3">
                 <Button
-                  onClick={() => { setState('idle'); setError(''); }}
+                  onClick={() => { setState('idle'); setError(''); setDreaminaJobId(''); }}
                   className="bg-red-500 hover:bg-red-600 text-white"
                 >
                   🔄 重试
